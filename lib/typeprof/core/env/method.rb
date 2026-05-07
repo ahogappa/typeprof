@@ -252,14 +252,15 @@ module TypeProf::Core
   end
 
   class Block
-    #: (AST::CallBaseNode, Vertex, Array[Vertex], Array[EscapeBox], Integer?, Hash[Symbol, Vertex]) -> void
-    def initialize(node, f_ary_arg, f_args, next_boxes, rest_index = nil, kw_f_args = {})
+    #: (AST::CallBaseNode, Vertex, Array[Vertex], Array[EscapeBox], Integer?, Hash[Symbol, Vertex], Vertex?) -> void
+    def initialize(node, f_ary_arg, f_args, next_boxes, rest_index = nil, kw_f_args = {}, rest_kw_f_arg = nil)
       @node = node
       @f_ary_arg = f_ary_arg
       @f_args = f_args
       @next_boxes = next_boxes
       @rest_index = rest_index
       @kw_f_args = kw_f_args
+      @rest_kw_f_arg = rest_kw_f_arg
     end
 
     attr_reader :node, :f_args, :next_boxes
@@ -280,6 +281,9 @@ module TypeProf::Core
       if caller_a_args && caller_a_args.keywords
         @kw_f_args.each do |name, f_arg|
           changes.add_edge(genv, caller_a_args.get_keyword_arg(genv, changes, name), f_arg)
+        end
+        if @rest_kw_f_arg
+          changes.add_edge(genv, caller_a_args.keywords, @rest_kw_f_arg)
         end
       end
     end
