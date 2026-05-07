@@ -254,7 +254,7 @@ module TypeProf::Core
 
         if rest_keywords
           if @rest_keywords == :"**anonymous_keyword"
-            @changes.add_edge(genv, Source.new(genv.gen_hash_type(Vertex.new(self), Vertex.new(self))), rest_keywords)
+            @changes.add_edge(genv, genv.gen_open_hash_source(self), rest_keywords)
           end
         end
 

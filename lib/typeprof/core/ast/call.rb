@@ -64,52 +64,23 @@ module TypeProf::Core
             @block_pass = nil
             @block_tbl = raw_block.locals
             @block_multi_targets = {}
-            @block_opt_positional_defaults = []
             ncref = CRef.new(lenv.cref.cpath, :instance, @mid, lenv.cref)
             nlenv = LocalEnv.new(@lenv.file_context, ncref, {}, @lenv.return_boxes)
             @block_f_args = case raw_block.parameters
                             when Prism::BlockParametersNode
-                              params = raw_block.parameters.parameters
-                              req = params.requireds.each_with_index.map do |n, i|
-                                if n.is_a?(Prism::MultiTargetNode)
-                                  @block_multi_targets[i] = n
-                                  nil
-                                else
-                                  n.name
-                                end
-                              end
-                              opt = params.optionals.map do |n|
-                                @block_opt_positional_defaults << AST.create_node(n.value, nlenv)
-                                n.name
-                              end
-                              rest = []
-                              if params.rest
-                                @block_rest_index = req.size + opt.size
-                                rest << (params.rest.name || :"*anonymous_rest")
-                              end
-                              post_offset = req.size + opt.size + rest.size
-                              posts = params.posts.each_with_index.map do |n, i|
-                                if n.is_a?(Prism::MultiTargetNode)
-                                  @block_multi_targets[post_offset + i] = n
-                                  nil
-                                else
-                                  n.name
-                                end
-                              end
-                              @block_post_count = posts.size
-                              params.keywords.each do |kw|
-                                case kw.type
-                                when :required_keyword_parameter_node
-                                  @block_req_keywords << kw.name
-                                when :optional_keyword_parameter_node
-                                  @block_opt_keywords << kw.name
-                                  @block_opt_keyword_defaults << AST.create_node(kw.value, nlenv)
-                                end
-                              end
-                              if params.keyword_rest.is_a?(Prism::KeywordRestParameterNode)
-                                @block_rest_keyword = params.keyword_rest.name || :"**anonymous_keyword"
-                              end
-                              req + opt + rest + posts
+                              h = AST.parse_params(@block_tbl, raw_block.parameters.parameters, nlenv)
+                              h[:req_multi_targets].each {|i, n| @block_multi_targets[i] = n }
+                              rest = h[:rest_positionals] ? [h[:rest_positionals]] : []
+                              @block_rest_index = h[:rest_positionals] ? h[:req_positionals].size + h[:opt_positionals].size : nil
+                              post_offset = h[:req_positionals].size + h[:opt_positionals].size + rest.size
+                              h[:post_multi_targets].each {|i, n| @block_multi_targets[post_offset + i] = n }
+                              @block_post_count = h[:post_positionals].size
+                              @block_req_keywords = h[:req_keywords]
+                              @block_opt_keywords = h[:opt_keywords]
+                              @block_opt_keyword_defaults = h[:opt_keyword_defaults]
+                              @block_rest_keyword = h[:rest_keywords]
+                              @block_opt_positional_defaults = h[:opt_positional_defaults]
+                              h[:req_positionals] + h[:opt_positionals] + rest + h[:post_positionals]
                             when Prism::NumberedParametersNode
                               1.upto(raw_block.parameters.maximum).map { |n| :"_#{n}" }
                             when Prism::ItParametersNode
@@ -181,7 +152,7 @@ module TypeProf::Core
           blk_rest_kw_f_arg = nil
           if @block_rest_keyword
             blk_rest_kw_f_arg = block_body.lenv.new_var(@block_rest_keyword, self)
-            @changes.add_edge(genv, Source.new(genv.gen_hash_type(Vertex.new(self), Vertex.new(self))), blk_rest_kw_f_arg)
+            @changes.add_edge(genv, genv.gen_open_hash_source(self), blk_rest_kw_f_arg)
           end
 
           if @block_opt_positional_defaults && !@block_opt_positional_defaults.empty?

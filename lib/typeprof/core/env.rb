@@ -62,6 +62,10 @@ module TypeProf::Core
       Type::Instance.new(self, @mod_hash, [key_vtx, val_vtx])
     end
 
+    def gen_open_hash_source(node)
+      Source.new(gen_hash_type(Vertex.new(node), Vertex.new(node)))
+    end
+
     def gen_range_type(elem_vtx)
       Type::Instance.new(self, @mod_range, [elem_vtx])
     end
