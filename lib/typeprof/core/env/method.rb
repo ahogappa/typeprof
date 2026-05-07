@@ -252,18 +252,19 @@ module TypeProf::Core
   end
 
   class Block
-    #: (AST::CallBaseNode, Vertex, Array[Vertex], Array[EscapeBox], Integer?) -> void
-    def initialize(node, f_ary_arg, f_args, next_boxes, rest_index = nil)
+    #: (AST::CallBaseNode, Vertex, Array[Vertex], Array[EscapeBox], Integer?, Hash[Symbol, Vertex]) -> void
+    def initialize(node, f_ary_arg, f_args, next_boxes, rest_index = nil, kw_f_args = {})
       @node = node
       @f_ary_arg = f_ary_arg
       @f_args = f_args
       @next_boxes = next_boxes
       @rest_index = rest_index
+      @kw_f_args = kw_f_args
     end
 
     attr_reader :node, :f_args, :next_boxes
 
-    def accept_args(genv, changes, caller_positionals)
+    def accept_args(genv, changes, caller_positionals, caller_a_args = nil)
       if caller_positionals.size == 1 && @f_args.size >= 2
         changes.add_edge(genv, caller_positionals[0], @f_ary_arg)
       elsif @rest_index
@@ -274,6 +275,11 @@ module TypeProf::Core
       else
         caller_positionals.zip(@f_args) do |a_arg, f_arg|
           changes.add_edge(genv, a_arg, f_arg) if f_arg
+        end
+      end
+      if caller_a_args && caller_a_args.keywords
+        @kw_f_args.each do |name, f_arg|
+          changes.add_edge(genv, caller_a_args.get_keyword_arg(genv, changes, name), f_arg)
         end
       end
     end
@@ -299,7 +305,7 @@ module TypeProf::Core
 
     attr_reader :node, :f_args, :ret, :used
 
-    def accept_args(genv, changes, caller_positionals)
+    def accept_args(genv, changes, caller_positionals, caller_a_args = nil)
       @used = true
       caller_positionals.each_with_index do |a_arg, i|
         changes.add_edge(genv, a_arg.new_vertex(genv, @node), get_f_arg(i))
