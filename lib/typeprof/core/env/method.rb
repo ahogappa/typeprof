@@ -278,7 +278,7 @@ module TypeProf::Core
           changes.add_edge(genv, a_arg, f_arg) if f_arg
         end
       end
-      if caller_a_args && caller_a_args.keywords
+      if caller_a_args&.keywords
         @kw_f_args.each do |name, f_arg|
           changes.add_edge(genv, caller_a_args.get_keyword_arg(genv, changes, name), f_arg)
         end

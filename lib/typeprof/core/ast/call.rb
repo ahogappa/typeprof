@@ -64,6 +64,9 @@ module TypeProf::Core
             @block_pass = nil
             @block_tbl = raw_block.locals
             @block_multi_targets = {}
+            @block_opt_positional_defaults = []
+            ncref = CRef.new(lenv.cref.cpath, :instance, @mid, lenv.cref)
+            nlenv = LocalEnv.new(@lenv.file_context, ncref, {}, @lenv.return_boxes)
             @block_f_args = case raw_block.parameters
                             when Prism::BlockParametersNode
                               params = raw_block.parameters.parameters
@@ -75,7 +78,10 @@ module TypeProf::Core
                                   n.name
                                 end
                               end
-                              opt = params.optionals.map {|n| n.name }
+                              opt = params.optionals.map do |n|
+                                @block_opt_positional_defaults << AST.create_node(n.value, nlenv)
+                                n.name
+                              end
                               rest = []
                               if params.rest
                                 @block_rest_index = req.size + opt.size
@@ -97,6 +103,7 @@ module TypeProf::Core
                                   @block_req_keywords << kw.name
                                 when :optional_keyword_parameter_node
                                   @block_opt_keywords << kw.name
+                                  @block_opt_keyword_defaults << AST.create_node(kw.value, nlenv)
                                 end
                               end
                               if params.keyword_rest.is_a?(Prism::KeywordRestParameterNode)
@@ -112,19 +119,6 @@ module TypeProf::Core
                             else
                               raise "not supported yet: #{ raw_block.parameters.class }"
                             end
-            ncref = CRef.new(lenv.cref.cpath, :instance, @mid, lenv.cref)
-            nlenv = LocalEnv.new(@lenv.file_context, ncref, {}, @lenv.return_boxes)
-            @block_opt_positional_defaults = []
-            if raw_block.parameters.is_a?(Prism::BlockParametersNode)
-              raw_block.parameters.parameters.optionals.each do |n|
-                @block_opt_positional_defaults << AST.create_node(n.value, nlenv)
-              end
-              raw_block.parameters.parameters.keywords.each do |kw|
-                if kw.type == :optional_keyword_parameter_node
-                  @block_opt_keyword_defaults << AST.create_node(kw.value, nlenv)
-                end
-              end
-            end
             @block_body = raw_block.body ? AST.create_node(raw_block.body, nlenv) : DummyNilNode.new(code_range, lenv)
           end
         end
@@ -181,10 +175,7 @@ module TypeProf::Core
             end
           end
           blk_kw_f_args = {}
-          @block_req_keywords.each do |name|
-            blk_kw_f_args[name] = block_body.lenv.new_var(name, self)
-          end
-          @block_opt_keywords.each do |name|
+          (@block_req_keywords + @block_opt_keywords).each do |name|
             blk_kw_f_args[name] = block_body.lenv.new_var(name, self)
           end
           blk_rest_kw_f_arg = nil
@@ -200,8 +191,8 @@ module TypeProf::Core
             end
           end
 
-          @block_opt_keywords.each_with_index do |name, i|
-            @changes.add_edge(genv, @block_opt_keyword_defaults[i].install(genv), blk_kw_f_args[name])
+          @block_opt_keywords.zip(@block_opt_keyword_defaults).each do |name, expr|
+            @changes.add_edge(genv, expr.install(genv), blk_kw_f_args[name])
           end
 
           if @block_multi_targets
@@ -241,12 +232,9 @@ module TypeProf::Core
             if i == @block_rest_index
               elem_vtx = @changes.add_splat_box(genv, blk_f_ary_arg, nil).ret
               @changes.add_edge(genv, Source.new(genv.gen_ary_type(elem_vtx)), f_arg)
-            elsif @block_post_count > 0 && i >= post_start
-              neg_idx = i - blk_f_args.size
-              elem_vtx = @changes.add_splat_box(genv, blk_f_ary_arg, neg_idx).ret
-              @changes.add_edge(genv, elem_vtx, f_arg)
             else
-              elem_vtx = @changes.add_splat_box(genv, blk_f_ary_arg, i).ret
+              idx = i >= post_start ? i - blk_f_args.size : i
+              elem_vtx = @changes.add_splat_box(genv, blk_f_ary_arg, idx).ret
               @changes.add_edge(genv, elem_vtx, f_arg)
             end
           end
