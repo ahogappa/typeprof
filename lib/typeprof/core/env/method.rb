@@ -252,12 +252,13 @@ module TypeProf::Core
   end
 
   class Block
-    #: (AST::CallBaseNode, Vertex, Array[Vertex], Array[EscapeBox]) -> void
-    def initialize(node, f_ary_arg, f_args, next_boxes)
+    #: (AST::CallBaseNode, Vertex, Array[Vertex], Array[EscapeBox], Integer?) -> void
+    def initialize(node, f_ary_arg, f_args, next_boxes, rest_index = nil)
       @node = node
       @f_ary_arg = f_ary_arg
       @f_args = f_args
       @next_boxes = next_boxes
+      @rest_index = rest_index
     end
 
     attr_reader :node, :f_args, :next_boxes
@@ -265,6 +266,11 @@ module TypeProf::Core
     def accept_args(genv, changes, caller_positionals)
       if caller_positionals.size == 1 && @f_args.size >= 2
         changes.add_edge(genv, caller_positionals[0], @f_ary_arg)
+      elsif @rest_index
+        unified = Vertex.new(@node)
+        caller_positionals.each {|vtx| changes.add_edge(genv, vtx, unified) }
+        tuple = Type::Array.new(genv, caller_positionals, genv.gen_ary_type(unified))
+        changes.add_edge(genv, Source.new(tuple), @f_ary_arg)
       else
         caller_positionals.zip(@f_args) do |a_arg, f_arg|
           changes.add_edge(genv, a_arg, f_arg) if f_arg

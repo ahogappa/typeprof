@@ -16,6 +16,7 @@ module TypeProf::Core
         @block_pass = nil
         @block_tbl = nil
         @block_f_args = nil
+        @block_rest_index = nil
         @block_opt_positional_defaults = nil
         @block_body = nil
         @safe_navigation = raw_node.respond_to?(:safe_navigation?) && raw_node.safe_navigation?
@@ -70,7 +71,12 @@ module TypeProf::Core
                                 end
                               end
                               opt = params.optionals.map {|n| n.name }
-                              req + opt
+                              rest = []
+                              if params.rest
+                                @block_rest_index = req.size + opt.size
+                                rest << (params.rest.name || :"*anonymous_rest")
+                              end
+                              req + opt + rest
                             when Prism::NumberedParametersNode
                               1.upto(raw_block.parameters.maximum).map { |n| :"_#{n}" }
                             when Prism::ItParametersNode
@@ -97,12 +103,12 @@ module TypeProf::Core
 
       attr_reader :recv, :mid, :mid_code_range, :yield
       attr_reader :positional_args, :splat_flags, :keyword_args
-      attr_reader :block_tbl, :block_f_args, :block_opt_positional_defaults, :block_body, :block_pass, :anonymous_block_forwarding
+      attr_reader :block_tbl, :block_f_args, :block_rest_index, :block_opt_positional_defaults, :block_body, :block_pass, :anonymous_block_forwarding
       attr_reader :block_multi_targets
       attr_reader :safe_navigation, :forwarding_arguments
 
       def subnodes = { recv:, positional_args:, keyword_args:, block_opt_positional_defaults:, block_body:, block_pass: }
-      def attrs = { mid:, splat_flags:, block_tbl:, block_f_args:, yield:, safe_navigation:, anonymous_block_forwarding:, forwarding_arguments: }
+      def attrs = { mid:, splat_flags:, block_tbl:, block_f_args:, block_rest_index:, yield:, safe_navigation:, anonymous_block_forwarding:, forwarding_arguments: }
 
       def install0(genv)
         recv = @recv ? @recv.install(genv) : @yield ? @lenv.get_var(:"*given_block") : @lenv.get_var(:"*self")
@@ -145,7 +151,7 @@ module TypeProf::Core
           end
 
           if @block_opt_positional_defaults && !@block_opt_positional_defaults.empty?
-            req_count = blk_f_args.size - @block_opt_positional_defaults.size
+            req_count = blk_f_args.size - @block_opt_positional_defaults.size - (@block_rest_index ? 1 : 0)
             @block_opt_positional_defaults.each_with_index do |expr, i|
               @changes.add_edge(genv, expr.install(genv), blk_f_args[req_count + i])
             end
@@ -183,12 +189,17 @@ module TypeProf::Core
           end
 
           blk_f_ary_arg = Vertex.new(self)
-          # TODO: support splat "do |a, *b, c|"
+          # TODO: support post args "do |a, *b, c|"
           blk_f_args.each_with_index do |f_arg, i|
-            elem_vtx = @changes.add_splat_box(genv, blk_f_ary_arg, i).ret
-            @changes.add_edge(genv, elem_vtx, f_arg)
+            if i == @block_rest_index
+              elem_vtx = @changes.add_splat_box(genv, blk_f_ary_arg, nil).ret
+              @changes.add_edge(genv, Source.new(genv.gen_ary_type(elem_vtx)), f_arg)
+            else
+              elem_vtx = @changes.add_splat_box(genv, blk_f_ary_arg, i).ret
+              @changes.add_edge(genv, elem_vtx, f_arg)
+            end
           end
-          block = Block.new(self, blk_f_ary_arg, blk_f_args, block_body.lenv.next_boxes)
+          block = Block.new(self, blk_f_ary_arg, blk_f_args, block_body.lenv.next_boxes, @block_rest_index)
           blk_ty = Source.new(Type::Proc.new(genv, block))
         elsif @block_pass
           blk_ty = @block_pass.install(genv)
