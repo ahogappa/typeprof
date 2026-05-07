@@ -19,6 +19,8 @@ module TypeProf::Core
         @block_rest_index = nil
         @block_post_count = 0
         @block_req_keywords = []
+        @block_opt_keywords = []
+        @block_opt_keyword_defaults = []
         @block_opt_positional_defaults = nil
         @block_body = nil
         @safe_navigation = raw_node.respond_to?(:safe_navigation?) && raw_node.safe_navigation?
@@ -92,6 +94,8 @@ module TypeProf::Core
                                 case kw.type
                                 when :required_keyword_parameter_node
                                   @block_req_keywords << kw.name
+                                when :optional_keyword_parameter_node
+                                  @block_opt_keywords << kw.name
                                 end
                               end
                               req + opt + rest + posts
@@ -111,6 +115,11 @@ module TypeProf::Core
               raw_block.parameters.parameters.optionals.each do |n|
                 @block_opt_positional_defaults << AST.create_node(n.value, nlenv)
               end
+              raw_block.parameters.parameters.keywords.each do |kw|
+                if kw.type == :optional_keyword_parameter_node
+                  @block_opt_keyword_defaults << AST.create_node(kw.value, nlenv)
+                end
+              end
             end
             @block_body = raw_block.body ? AST.create_node(raw_block.body, nlenv) : DummyNilNode.new(code_range, lenv)
           end
@@ -121,12 +130,12 @@ module TypeProf::Core
 
       attr_reader :recv, :mid, :mid_code_range, :yield
       attr_reader :positional_args, :splat_flags, :keyword_args
-      attr_reader :block_tbl, :block_f_args, :block_rest_index, :block_post_count, :block_req_keywords, :block_opt_positional_defaults, :block_body, :block_pass, :anonymous_block_forwarding
+      attr_reader :block_tbl, :block_f_args, :block_rest_index, :block_post_count, :block_req_keywords, :block_opt_keywords, :block_opt_keyword_defaults, :block_opt_positional_defaults, :block_body, :block_pass, :anonymous_block_forwarding
       attr_reader :block_multi_targets
       attr_reader :safe_navigation, :forwarding_arguments
 
-      def subnodes = { recv:, positional_args:, keyword_args:, block_opt_positional_defaults:, block_body:, block_pass: }
-      def attrs = { mid:, splat_flags:, block_tbl:, block_f_args:, block_rest_index:, block_post_count:, block_req_keywords:, yield:, safe_navigation:, anonymous_block_forwarding:, forwarding_arguments: }
+      def subnodes = { recv:, positional_args:, keyword_args:, block_opt_positional_defaults:, block_opt_keyword_defaults:, block_body:, block_pass: }
+      def attrs = { mid:, splat_flags:, block_tbl:, block_f_args:, block_rest_index:, block_post_count:, block_req_keywords:, block_opt_keywords:, yield:, safe_navigation:, anonymous_block_forwarding:, forwarding_arguments: }
 
       def install0(genv)
         recv = @recv ? @recv.install(genv) : @yield ? @lenv.get_var(:"*given_block") : @lenv.get_var(:"*self")
@@ -171,12 +180,19 @@ module TypeProf::Core
           @block_req_keywords.each do |name|
             blk_kw_f_args[name] = block_body.lenv.new_var(name, self)
           end
+          @block_opt_keywords.each do |name|
+            blk_kw_f_args[name] = block_body.lenv.new_var(name, self)
+          end
 
           if @block_opt_positional_defaults && !@block_opt_positional_defaults.empty?
             req_count = blk_f_args.size - @block_opt_positional_defaults.size - (@block_rest_index ? 1 : 0) - @block_post_count
             @block_opt_positional_defaults.each_with_index do |expr, i|
               @changes.add_edge(genv, expr.install(genv), blk_f_args[req_count + i])
             end
+          end
+
+          @block_opt_keywords.each_with_index do |name, i|
+            @changes.add_edge(genv, @block_opt_keyword_defaults[i].install(genv), blk_kw_f_args[name])
           end
 
           if @block_multi_targets
