@@ -326,9 +326,21 @@ module TypeProf::Core
       end
     end
 
+    # Prism::LambdaNode has the same locals/parameters/body as Prism::BlockNode, so
+    # the body is analyzed as a block. It is not a call: `->` never dispatches to a
+    # user-defined `lambda` method.
     class LambdaNode < Node
+      def initialize(raw_node, lenv)
+        super(raw_node, lenv)
+        @block = BlockNode.new(raw_node, lenv, lenv.cref.mid)
+      end
+
+      attr_reader :block
+
+      def subnodes = { block: }
+
       def install0(genv)
-        Source.new(genv.proc_type)
+        @block.install(genv)
       end
     end
   end

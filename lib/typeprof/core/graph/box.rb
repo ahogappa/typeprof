@@ -632,8 +632,8 @@ module TypeProf::Core
         changes.add_diagnostic(:last_stmt_code_range, msg, @node)
       when AST::NextNode
         changes.add_diagnostic(:code_range, msg, @node)
-      when AST::CallNode
-        changes.add_diagnostic(:block_last_stmt_code_range, msg, @node)
+      when AST::BlockNode
+        changes.add_diagnostic(:last_stmt_code_range, msg, @node)
       when AST::AttrReaderMetaNode, AST::AttrAccessorMetaNode
         changes.add_diagnostic(:code_range, msg, @node)
       else
