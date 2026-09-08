@@ -424,7 +424,7 @@ module TypeProf::Core
   end
 
   class Block
-    #: (AST::CallBaseNode, Vertex, Array[Vertex], Array[EscapeBox]) -> void
+    #: (AST::BlockNode, Vertex, Array[Vertex], Array[EscapeBox]) -> void
     def initialize(node, f_ary_arg, f_args, next_boxes)
       @node = node
       @f_ary_arg = f_ary_arg

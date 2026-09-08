@@ -625,20 +625,7 @@ module TypeProf::Core
     def wrong_return_type(f_ret_show, changes)
       actual_ty = @a_ret.show
       msg = "expected: #{ f_ret_show }; actual: #{ actual_ty }"
-      case @node
-      when AST::ReturnNode
-        changes.add_diagnostic(:code_range, msg, @node)
-      when AST::DefNode
-        changes.add_diagnostic(:last_stmt_code_range, msg, @node)
-      when AST::NextNode
-        changes.add_diagnostic(:code_range, msg, @node)
-      when AST::CallNode
-        changes.add_diagnostic(:block_last_stmt_code_range, msg, @node)
-      when AST::AttrReaderMetaNode, AST::AttrAccessorMetaNode
-        changes.add_diagnostic(:code_range, msg, @node)
-      else
-        pp @node.class
-      end
+      changes.add_diagnostic(:ret_code_range, msg, @node)
     end
   end
 
