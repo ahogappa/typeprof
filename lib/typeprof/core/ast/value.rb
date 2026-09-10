@@ -331,10 +331,8 @@ module TypeProf::Core
     # user-defined `lambda` method.
     class LambdaNode < BlockNode
       def initialize(raw_node, lenv)
-        super(raw_node, lenv, lenv.cref.mid)
+        super(raw_node, lenv, lenv.cref.mid, lambda: true)
       end
-
-      def lambda? = true
     end
   end
 end

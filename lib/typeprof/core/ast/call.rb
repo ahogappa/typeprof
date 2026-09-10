@@ -2,14 +2,15 @@ module TypeProf::Core
   class AST
     # @lenv is the scope the block closes over; the body has its own LocalEnv.
     class BlockNode < Node
-      def initialize(raw_node, lenv, mid)
+      def initialize(raw_node, lenv, mid, lambda:)
         super(raw_node, lenv)
 
+        @lambda = lambda
         @tbl = raw_node.locals
         ncref = CRef.new(lenv.cref.cpath, :instance, mid, lenv.cref)
         # A `return` in a block exits the enclosing method, so the body writes into
         # its return boxes. A lambda's `return` exits the lambda, so it gets its own.
-        nlenv = LocalEnv.new(lenv.file_context, ncref, {}, lambda? ? [] : lenv.return_boxes)
+        nlenv = LocalEnv.new(lenv.file_context, ncref, {}, lambda ? [] : lenv.return_boxes)
 
         @f_args = []
         @multi_targets = {}
@@ -36,7 +37,7 @@ module TypeProf::Core
       attr_reader :tbl, :f_args, :opt_positional_defaults, :body
 
       def subnodes = { opt_positional_defaults:, body: }
-      def attrs = { tbl:, f_args: }
+      def attrs = { tbl:, f_args:, :lambda? => @lambda }
 
       def install0(genv)
         blenv = @body.lenv
@@ -70,11 +71,11 @@ module TypeProf::Core
         blenv.locals[:"*expected_block_ret"] = Vertex.new(self)
         # Present already when the lambda sits in a method; a top-level one still
         # needs it, or ReturnNode drops the returned value on the floor.
-        blenv.locals[:"*expected_method_ret"] ||= Vertex.new(self) if lambda?
+        blenv.locals[:"*expected_method_ret"] ||= Vertex.new(self) if @lambda
         @body.install(genv)
         blenv.add_next_box(@changes.add_escape_box(genv, @body.ret))
 
-        if lambda?
+        if @lambda
           # `return` and `break` leave the lambda itself, so they reach the caller
           # of #call the same way the body's own value does.
           blenv.return_boxes.each {|box| blenv.add_next_box(box) }
@@ -101,11 +102,11 @@ module TypeProf::Core
         super(tbl - @tbl, vars)
       end
 
+      def lambda? = @lambda
+
       # A block's `break` leaves the method that yielded, so the call it belongs to
       # takes the value; a lambda's `break` leaves the lambda and is wired above.
-      def lambda? = false
-
-      def break_vtx = lambda? ? nil : @body.lenv.break_vtx
+      def break_vtx = @lambda ? nil : @body.lenv.break_vtx
 
       def ret_code_range = @body.ret_code_range
     end
@@ -162,7 +163,12 @@ module TypeProf::Core
               @anonymous_block_forwarding = true
             end
           else
-            @block = BlockNode.new(raw_block, lenv, @mid)
+            # Kernel#lambda makes a lambda out of its block. Detecting it by name
+            # is what a reader does too, and matches how Struct.new and attr_* are
+            # recognized; a user-defined `lambda` is misread as Kernel's, which
+            # only narrows what its `return` reaches.
+            is_lambda = !recv && mid == :lambda
+            @block = BlockNode.new(raw_block, lenv, @mid, lambda: is_lambda)
           end
         end
 
