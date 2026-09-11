@@ -11,6 +11,9 @@ module TypeProf::Core
         # its return boxes. A lambda's `return` exits the lambda, so it gets its own.
         nlenv = LocalEnv.new(lenv.file_context, ncref, {}, lambda? ? [] : lenv.return_boxes)
 
+        # parse_params with no parameters returns the canonical empty set, so the
+        # readers below never have to ask whether there were any.
+        @params = AST.parse_params(@tbl, nil, nlenv)
         @f_args = []
         @multi_targets = {}
         @opt_positional_defaults = []
@@ -18,10 +21,10 @@ module TypeProf::Core
         when Prism::BlockParametersNode
           # `{ || ... }` (empty pipes) and `{ |; x| ... }` (block-local-only)
           # yield BlockParametersNode whose inner `parameters` is nil.
-          h = AST.parse_params(@tbl, raw_node.parameters.parameters, nlenv)
-          @f_args = h[:req_positionals] + h[:opt_positionals]
-          @multi_targets = h[:req_multi_targets]
-          @opt_positional_defaults = h[:opt_positional_defaults]
+          @params = AST.parse_params(@tbl, raw_node.parameters.parameters, nlenv)
+          @f_args = @params[:req_positionals] + @params[:opt_positionals]
+          @multi_targets = @params[:req_multi_targets]
+          @opt_positional_defaults = @params[:opt_positional_defaults]
         when Prism::NumberedParametersNode
           @f_args = 1.upto(raw_node.parameters.maximum).map {|n| :"_#{n}" }
         when Prism::ItParametersNode
@@ -35,8 +38,24 @@ module TypeProf::Core
 
       attr_reader :tbl, :f_args, :opt_positional_defaults, :body
 
+      # FormalArguments carries vertices; the keyword names stay on the node, which
+      # is where FormalArguments#pass_arguments looks them up.
+      def req_keywords = @params[:req_keywords]
+      def opt_keywords = @params[:opt_keywords]
+      def rest_keywords = @params[:rest_keywords]
+      def opt_keyword_defaults = @params[:opt_keyword_defaults]
+
       def subnodes = { opt_positional_defaults:, body: }
-      def attrs = { tbl:, f_args: }
+      # f_args covers only the parameters a block binds, so the rest have to be
+      # compared too or an edit that only touches them looks like no edit at all.
+      def attrs = { tbl:, f_args:, formal_names: }
+
+      def formal_names
+        @params.values_at(
+          :req_positionals, :opt_positionals, :rest_positionals, :post_positionals,
+          :req_keywords, :opt_keywords, :rest_keywords, :block,
+        )
+      end
 
       def install0(genv)
         blenv = @body.lenv
@@ -53,6 +72,7 @@ module TypeProf::Core
         end
 
         install_multi_targets(genv, @multi_targets, f_args, blenv)
+        formals = build_formals(genv, blenv, f_args)
 
         @lenv.locals.each do |var, vtx|
           blenv.set_var(var, vtx)
@@ -91,9 +111,13 @@ module TypeProf::Core
           elem_vtx = @changes.add_splat_box(genv, f_ary_arg, i).ret
           @changes.add_edge(genv, elem_vtx, f_arg)
         end
-        block = Block.new(self, f_ary_arg, f_args, blenv.next_boxes)
+        block = Block.new(self, f_ary_arg, f_args, blenv.next_boxes, formals)
         Source.new(Type::Proc.new(genv, block))
       end
+
+      # A block is yielded to, and what a yielding method passes is the positional
+      # list alone; there are no formals to bind beyond it.
+      def build_formals(genv, blenv, f_args) = nil
 
       # Block-local variables shadow the outer ones, so writes to them are not
       # modifications of the enclosing scope.
