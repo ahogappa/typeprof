@@ -77,7 +77,17 @@ module TypeProf::Core
         end
       end
 
-      rest_positionals = raw_args.rest ? (raw_args.rest.name || :"*anonymous_rest") : nil
+      rest_positionals =
+        case raw_args.rest
+        when nil
+          nil
+        when Prism::ImplicitRestNode
+          # `{ |a,| }`. The trailing comma says there is a rest without naming
+          # it, so the node carries no name to ask for.
+          :"*anonymous_rest"
+        else
+          raw_args.rest.name || :"*anonymous_rest"
+        end
 
       req_keywords = []
       opt_keywords = []
