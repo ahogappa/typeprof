@@ -780,7 +780,6 @@ module TypeProf::Core
       decl = me.decls.to_a.first
       # TODO: support overload?
       method_type = decl.method_types.first
-      _block = method_type.block
 
       mod = genv.resolve_cpath(@cpath)
       if @singleton
@@ -821,22 +820,27 @@ module TypeProf::Core
         splat_flags << false
       end
 
-      # Keywords are bound only from a signature with a single method type:
-      # which overload a call took is not known here, and the first one's
-      # keywords are as good as wrong for the others. (The positionals above
-      # keep taking the first, as before.)
+      # Keywords and the block are bound only from a signature with a single
+      # method type: which overload a call took is not known here, and the
+      # first one's are as good as wrong for the others. (The positionals
+      # above keep taking the first, as before.)
       single = me.decls.size == 1 && decl.method_types.size == 1
       rest_type = method_type.rest_keywords
       rest_keywords = rest_type.contravariant_vertex(genv, changes, param_map0) if single && rest_type && sig_type_bindable?(rest_type)
       keywords = sig_keyword_arguments(genv, changes, method_type, param_map0, rest_keywords) if single
-      a_args = ActualArguments.new(positional_args, splat_flags, keywords, nil) # TODO: block
+      a_args = ActualArguments.new(positional_args, splat_flags, keywords, nil)
       if pass_arguments(changes, genv, a_args)
         # The rest of the keywords the signature accepts, beyond those it names.
         if rest_keywords && @f_args.rest_keywords
           rest_hash = genv.gen_hash_type(changes.new_source([method_type, :keyword_key], genv.symbol_type), rest_keywords)
           changes.add_edge(genv, Source.new(rest_hash), @f_args.rest_keywords)
         end
-        # TODO: block
+        # Yielding to the block gives back what the signature says it
+        # returns. A void return says nothing, so it gives nothing.
+        blk_ret = method_type.block&.return_type
+        if single && blk_ret && !blk_ret.is_a?(AST::SigTyBaseVoidNode) && sig_type_bindable?(blk_ret)
+          changes.add_edge(genv, blk_ret.contravariant_vertex(genv, changes, param_map0), @record_block.sig_ret)
+        end
         f_ret = method_type.return_type.contravariant_vertex(genv, changes, param_map0)
         changes.add_edge(genv, f_ret, @ret)
         @ret_boxes.each do |ret_box|

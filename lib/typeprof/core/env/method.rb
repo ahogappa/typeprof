@@ -605,13 +605,16 @@ module TypeProf::Core
       @used = false
       @f_args = []
       @ret = Vertex.new(node)
+      @sig_ret = Vertex.new(node)
     end
 
     def get_f_arg(i)
       @f_args[i] ||= Vertex.new(@node)
     end
 
-    attr_reader :node, :f_args, :ret, :used
+    # sig_ret is what the def's signature says the block returns
+    # (MethodDefBox#run0); every yield to the block gets it back.
+    attr_reader :node, :f_args, :ret, :used, :sig_ret
 
     def accept_args(genv, changes, caller_positionals)
       @used = true
@@ -622,6 +625,7 @@ module TypeProf::Core
 
     def add_ret(genv, changes, ret)
       changes.add_edge(genv, ret, @ret)
+      changes.add_edge(genv, @sig_ret, ret)
     end
   end
 end
