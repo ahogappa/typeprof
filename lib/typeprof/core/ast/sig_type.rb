@@ -715,8 +715,8 @@ module TypeProf::Core
         mod = genv.resolve_cpath(cpath)
         # TODO: report error for wrong type arguments
         # TODO: support default type args
-        args = mod.type_params.zip(@args).map do |_, arg|
-          arg ? arg.contravariant_vertex(genv, changes, subst) : Source.new
+        args = mod.type_params.zip(@args).each_with_index.map do |(_, arg), i|
+          arg ? arg.contravariant_vertex(genv, changes, subst) : changes.new_source([self, :missing_arg, i])
         end
         changes.add_edge(genv, Source.new(Type::Instance.new(genv, mod, args)), vtx)
       end
@@ -818,7 +818,7 @@ module TypeProf::Core
         end
 
         # Create base Hash type for Record
-        key_vtx = Source.new(genv.symbol_type)
+        key_vtx = changes.new_source([self, :key], genv.symbol_type)
         # Create union of all field values for the Hash value type
         val_vtx = changes.new_covariant_vertex(genv, [self, :union])
         field_vertices.each_value do |field_vtx|
@@ -836,7 +836,7 @@ module TypeProf::Core
         end
 
         # Create base Hash type for Record
-        key_vtx = Source.new(genv.symbol_type)
+        key_vtx = changes.new_source([self, :key], genv.symbol_type)
         # Create union of all field values for the Hash value type
         val_vtx = changes.new_contravariant_vertex(genv, [self, :union])
         field_vertices.each_value do |field_vtx|
@@ -854,10 +854,12 @@ module TypeProf::Core
           next if ty.is_a?(Type::Bot)
           found_any = true
           case ty
-          when Type::Hash
+          when Type::Hash, Type::Record
+            # A record lacks the fields it was not built with; a hash
+            # answers any key with its value type.
             @keys.zip(@vals) do |key, val_node|
               val_vtx = ty.get_value(key)
-              return false unless val_node.typecheck(genv, changes, val_vtx, subst)
+              return false unless val_vtx && val_node.typecheck(genv, changes, val_vtx, subst)
             end
             return true
           end

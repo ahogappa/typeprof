@@ -283,6 +283,9 @@ module TypeProf::Core
       me = genv.resolve_method(@cpath, @singleton, @mid)
       me.remove_decl(self)
       me.add_run_all_method_call_boxes(genv)
+      # The defs took their formals from this declaration (MethodDefBox#run0);
+      # they run again to drop them, as they ran to take them (initialize).
+      me.add_run_all_mdefs(genv)
       destroy_symbol_proc_call_boxes(genv)
     end
 
@@ -764,7 +767,14 @@ module TypeProf::Core
 
     def run0(genv, changes)
       me = genv.resolve_method(@cpath, @singleton, @mid)
-      return if me.decls.empty?
+      if me.decls.empty?
+        # A run keeps only the edges it adds itself, and this one runs again
+        # when its declaration is removed (MethodDeclBox#destroy).
+        @ret_boxes.each do |box|
+          changes.add_edge(genv, box.ret, @ret)
+        end
+        return
+      end
 
       # TODO: support "| ..."
       decl = me.decls.to_a.first
@@ -777,7 +787,7 @@ module TypeProf::Core
         ty = Type::Singleton.new(genv, mod)
         param_map0 = Type.default_param_map(genv, ty)
       else
-        type_params = mod.type_params.map {|(_name, _default_ty)| Source.new() } # TODO: better support
+        type_params = mod.type_params.map {|(name, _default_ty)| changes.new_source([:type_param, name]) } # TODO: better support
         ty = Type::Instance.new(genv, mod, type_params)
         param_map0 = Type.default_param_map(genv, ty)
         if ty.is_a?(Type::Instance)
@@ -787,7 +797,7 @@ module TypeProf::Core
         end
       end
       method_type.type_params.each do |name, _default_ty|
-        param_map0[name] = Source.new()
+        param_map0[name] = changes.new_source([method_type, :type_param, name])
       end
 
       positional_args = []
@@ -811,8 +821,21 @@ module TypeProf::Core
         splat_flags << false
       end
 
-      a_args = ActualArguments.new(positional_args, splat_flags, nil, nil) # TODO: keywords and block
+      # Keywords are bound only from a signature with a single method type:
+      # which overload a call took is not known here, and the first one's
+      # keywords are as good as wrong for the others. (The positionals above
+      # keep taking the first, as before.)
+      single = me.decls.size == 1 && decl.method_types.size == 1
+      rest_type = method_type.rest_keywords
+      rest_keywords = rest_type.contravariant_vertex(genv, changes, param_map0) if single && rest_type && sig_type_bindable?(rest_type)
+      keywords = sig_keyword_arguments(genv, changes, method_type, param_map0, rest_keywords) if single
+      a_args = ActualArguments.new(positional_args, splat_flags, keywords, nil) # TODO: block
       if pass_arguments(changes, genv, a_args)
+        # The rest of the keywords the signature accepts, beyond those it names.
+        if rest_keywords && @f_args.rest_keywords
+          rest_hash = genv.gen_hash_type(changes.new_source([method_type, :keyword_key], genv.symbol_type), rest_keywords)
+          changes.add_edge(genv, Source.new(rest_hash), @f_args.rest_keywords)
+        end
         # TODO: block
         f_ret = method_type.return_type.contravariant_vertex(genv, changes, param_map0)
         changes.add_edge(genv, f_ret, @ret)
@@ -827,6 +850,51 @@ module TypeProf::Core
     def pass_arguments(changes, genv, a_args)
       @f_args.pass_arguments(changes, genv, a_args, @node)
     end
+
+    # The keywords a caller of the signature passes, as the record a call
+    # site would build: a field per keyword the signature names. A keyword
+    # the def names but the signature does not can only arrive through the
+    # signature's `**`, so it takes that type.
+    def sig_keyword_arguments(genv, changes, method_type, param_map, rest_keywords)
+      def_keywords = @node.req_keywords + @node.opt_keywords
+      return nil if def_keywords.empty? && !@f_args.rest_keywords
+
+      fields = {}
+      method_type.req_keyword_keys.zip(method_type.req_keyword_values) do |key, ty|
+        fields[key] = ty.contravariant_vertex(genv, changes, param_map) if sig_type_bindable?(ty)
+      end
+      method_type.opt_keyword_keys.zip(method_type.opt_keyword_values) do |key, ty|
+        fields[key] = ty.contravariant_vertex(genv, changes, param_map) if sig_type_bindable?(ty)
+      end
+      if rest_keywords
+        def_keywords.each do |key|
+          fields[key] ||= rest_keywords
+        end
+      end
+      return nil if fields.empty?
+
+      # The base hash is what the def's own `**` takes of the record
+      # (FormalArguments#pass_arguments): the fields the def does not name,
+      # never the ones it does.
+      val = changes.new_contravariant_vertex(genv, [method_type, :keywords])
+      fields.each do |key, vtx|
+        changes.add_edge(genv, vtx, val) unless def_keywords.include?(key)
+      end
+      base_hash_type = genv.gen_hash_type(changes.new_source([method_type, :keyword_key], genv.symbol_type), val)
+      Source.new(Type::Record.new(genv, fields, base_hash_type))
+    end
+
+    # Whether a signature type can be handed to the def as it stands. A type
+    # variable cannot: the def would see `var[T]`, a type its body can call
+    # nothing on, and every use would be reported.
+    def sig_type_bindable?(node)
+      return false if node.is_a?(AST::SigTyVarNode)
+      node.each_subnode do |subnode|
+        return false unless sig_type_bindable?(subnode)
+      end
+      true
+    end
+
     def normalize_keyword_hash_argument_for_def(a_args)
       return a_args unless a_args.keywords
       return a_args if @node.no_keywords
