@@ -283,6 +283,9 @@ module TypeProf::Core
       me = genv.resolve_method(@cpath, @singleton, @mid)
       me.remove_decl(self)
       me.add_run_all_method_call_boxes(genv)
+      # MethodDefBox#run0 binds the defs' formals from the method's
+      # declarations; re-run the defs so they drop what they took from this one.
+      me.add_run_all_mdefs(genv)
       destroy_symbol_proc_call_boxes(genv)
     end
 
@@ -716,8 +719,8 @@ module TypeProf::Core
       @hsh.each_type do |ty|
         ty = ty.base_type(genv)
         if ty.mod == genv.mod_hash
-          changes.add_edge(genv, ty.args[0].new_vertex(genv, :__hash_splat), @unified_key)
-          changes.add_edge(genv, ty.args[1].new_vertex(genv, :__hash_splat), @unified_val)
+          changes.add_edge(genv, changes.new_vertex(genv, :__hash_splat, ty.args[0]), @unified_key)
+          changes.add_edge(genv, changes.new_vertex(genv, :__hash_splat, ty.args[1]), @unified_val)
         else
           "???"
         end
@@ -737,8 +740,8 @@ module TypeProf::Core
 
       @record_block = RecordBlock.new(@node)
       if @f_args.block
-        record_blk_ty = Source.new(Type::Proc.new(genv, @record_block))
-        record_blk_ty.add_edge(genv, @f_args.block)
+        @record_blk_ty = Source.new(Type::Proc.new(genv, @record_block))
+        @record_blk_ty.add_edge(genv, @f_args.block)
       end
 
       @ret_boxes = ret_boxes
@@ -766,13 +769,20 @@ module TypeProf::Core
 
     def run0(genv, changes)
       me = genv.resolve_method(@cpath, @singleton, @mid)
-      return if me.decls.empty?
+      if me.decls.empty?
+        # Without a declaration the return comes from the body. Every run
+        # replaces the box's edges, so the edges from the body's returns are
+        # added on each run, not only by initialize.
+        @ret_boxes.each do |box|
+          changes.add_edge(genv, box.ret, @ret)
+        end
+        return
+      end
 
       # TODO: support "| ..."
       decl = me.decls.to_a.first
       # TODO: support overload?
       method_type = decl.method_types.first
-      _block = method_type.block
 
       mod = genv.resolve_cpath(@cpath)
       if @singleton
@@ -789,7 +799,7 @@ module TypeProf::Core
         end
       end
       method_type.type_params.each do |name, _default_ty|
-        param_map0[name] = Source.new()
+        param_map0[name] = genv.untyped_arg
       end
 
       positional_args = []
@@ -813,29 +823,167 @@ module TypeProf::Core
         splat_flags << false
       end
 
-      a_args = ActualArguments.new(positional_args, splat_flags, nil, nil) # TODO: keywords and block
-      if pass_arguments(changes, genv, a_args)
-        # TODO: block
-        f_ret = method_type.return_type.contravariant_vertex(genv, changes, param_map0)
-        changes.add_edge(genv, f_ret, @ret)
-        @ret_boxes.each do |ret_box|
-          unless method_type.return_type.typecheck(genv, changes, ret_box.a_ret, param_map0)
-            ret_box.wrong_return_type(method_type.return_type.show, changes)
-          end
+      # Which overload a call took is unknown here, so the keywords are bound
+      # only when the method has a single declaration with a single method
+      # type. (Positional arguments always use the first method type, and are
+      # bound whatever their type; see the TODO above.)
+      decls = me.decls.to_a + me.overloading_decls.to_a
+      single = decls.size == 1 && decl.method_types.size == 1
+      keywords =
+        if single
+          sig_keyword_arguments(genv, changes, method_type, param_map0)
+        elsif decls.any? {|d| d.method_types.any? {|mt| sig_keywords?(mt) } }
+          genv.untyped_arg # some keywords, of an unknown type
+        end
+      # The block is passed only when a declaration has one. It is this box's
+      # own RecordBlock Proc, not @f_args.block: the two boxes of a
+      # module_function def share @f_args.block and, when the body forwards,
+      # its forwarding arguments, so both would add the same edge between
+      # them, which Vertex#add_edge rejects.
+      block = @record_blk_ty if decls.any? {|d| d.method_types.any?(&:block) }
+      a_args = ActualArguments.new(positional_args, splat_flags, keywords, block)
+      # A def without keyword parameters takes the keywords as its last
+      # positional hash. Required keywords go in when it has room for one
+      # more positional. Optional ones need not come with a call, so they go
+      # only into a positional that the signature's positionals leave free
+      # without moving any of them (`def m(opts = {})`), never into `*args`.
+      req = @f_args.req_positionals.size + @f_args.post_positionals.size
+      free = positional_args.size < req + @f_args.opt_positionals.size
+      room =
+        if method_type.req_keyword_keys.empty?
+          free && !method_type.rest_positionals && (@f_args.post_positionals.empty? || positional_args.size < req)
+        else
+          free || @f_args.rest_positionals
+        end
+      a_args = a_args.with_keywords_normalized_for(@node) if room
+      sig_positionals = method_type.req_positionals + method_type.opt_positionals + [method_type.rest_positionals].compact + method_type.post_positionals
+      forward = sig_positionals_forwardable?(sig_positionals, a_args)
+      return unless pass_arguments(changes, genv, a_args, forward)
+
+      # TODO: block return type
+      f_ret = method_type.return_type.contravariant_vertex(genv, changes, param_map0)
+      changes.add_edge(genv, f_ret, @ret)
+      @ret_boxes.each do |ret_box|
+        unless method_type.return_type.typecheck(genv, changes, ret_box.a_ret, param_map0)
+          ret_box.wrong_return_type(method_type.return_type.show, changes)
         end
       end
     end
 
-    def pass_arguments(changes, genv, a_args)
-      @f_args.pass_arguments(changes, genv, a_args, @node)
+    # Binds the arguments to the def's formals, and, when forward, to what
+    # bare super and (...) in the body pass on.
+    def pass_arguments(changes, genv, a_args, forward = true)
+      return false unless @f_args.pass_arguments(changes, genv, a_args, @node)
+      forward_args = @node.body.lenv.forward_args if forward && @node.is_a?(AST::DefNode)
+      forward_args&.accept_actual_arguments(genv, changes, a_args)
+      true
+    end
+
+    # Builds the keywords a caller of the signature passes. Without `**` in
+    # the signature they are a record, with a field per keyword it names.
+    # With `**` they are a hash whose other keys have the `**` type, as a
+    # call site passes `f(k: v, **h)`. A keyword that only the def names can
+    # be passed only through the signature's `**`, so it gets that type. A
+    # type that sig_type_bindable? rejects is left untyped.
+    def sig_keyword_arguments(genv, changes, method_type, param_map)
+      return nil unless sig_keywords?(method_type)
+
+      bind = ->(ty) { sig_type_bindable?(ty) ? ty.contravariant_vertex(genv, changes, param_map) : genv.untyped_arg }
+      keys = method_type.req_keyword_keys + method_type.opt_keyword_keys
+      tys = method_type.req_keyword_values + method_type.opt_keyword_values
+      fields = keys.zip(tys).to_h {|key, ty| [key, bind[ty]] }
+      rest = bind[method_type.rest_keywords] if method_type.rest_keywords
+      def_keywords = @node.req_keywords + @node.opt_keywords
+      def_keywords.each {|key| fields[key] ||= rest } if rest
+      # The base hash is what the def's `**` holds of the keywords (see
+      # FormalArguments#pass_arguments): those the def does not name, and
+      # the signature's `**`.
+      val = changes.new_contravariant_vertex(genv, :sig_keywords)
+      fields.each {|key, vtx| changes.add_edge(genv, vtx, val) unless def_keywords.include?(key) }
+      changes.add_edge(genv, rest, val) if rest
+      base = genv.gen_hash_type(changes.new_source(:sig_keyword_key, genv.symbol_type), val)
+      Source.new(rest ? Type::Hash.new(genv, fields, base) : Type::Record.new(genv, fields, base))
+    end
+
+    # Whether bare super and (...) can pass on the positionals a_args, bound
+    # from sig_positionals, gives the def. They pass the def's rest
+    # positional on as a splat, which is dropped from the call when empty.
+    # So none of sig_positionals that can land in it may be untyped: it
+    # would be dropped, as if a call left the argument out. Nor one that
+    # sig_type_bindable? rejects: it would reach the callee as var[T].
+    def sig_positionals_forwardable?(sig_positionals, a_args)
+      return true unless @f_args.rest_positionals
+      size = a_args.positionals.size
+      lead = @f_args.req_positionals.size + @f_args.opt_positionals.size
+      post = @f_args.post_positionals.size
+      # The positionals from `from` up to `to` can land in the rest
+      # positional, as FormalArguments#pass_arguments and
+      # ForwardingArguments#accept_actual_arguments place them.
+      if (first = a_args.splat_flags.index(true))
+        from = [first, lead].min
+        to = [a_args.splat_flags.rindex(true) + 1, size - post].max
+      else
+        from = lead
+        to = size - post
+      end
+      sig_positionals.each_with_index.all? do |ty, i|
+        i < from || to <= i || (sig_type_bindable?(ty) && !sig_type_untyped?(ty))
+      end
+    end
+
+    def sig_keywords?(method_type)
+      !method_type.req_keyword_keys.empty? || !method_type.opt_keyword_keys.empty? || method_type.rest_keywords
+    end
+
+    # Whether a signature type can be bound to a formal of the def. Not when
+    # it mentions a type variable, also in the body of an alias it uses
+    # (`array[String]` is `Array[T]` there): a call on such a formal (e.g.
+    # `x.size` on var[T]) would be reported as an undefined method. Nor when
+    # a union or optional has untyped or top in it (`untyped?`), also in the
+    # body of an alias, since those add no type and the other members (nil
+    # for `untyped?`) would be all the formal holds.
+    def sig_type_bindable?(node, seen = {})
+      node.traverse do |event, n|
+        next unless event == :enter
+        case n
+        when AST::SigTyVarNode
+          return false
+        when AST::SigTyAliasNode
+          next if seen[n]
+          seen[n] = true
+          body = sig_alias_body(n)
+          return false if body && !sig_type_bindable?(body, seen)
+        when AST::SigTyOptionalNode
+          return false if sig_type_untyped?(n.type)
+        when AST::SigTyUnionNode
+          return false if n.types.any? {|ty| sig_type_untyped?(ty) }
+        end
+      end
+      true
+    end
+
+    def sig_type_untyped?(node, seen = {})
+      case node
+      when AST::SigTyBaseAnyNode, AST::SigTyBaseTopNode
+        true
+      when AST::SigTyAliasNode
+        return false if seen[node]
+        seen[node] = true
+        body = sig_alias_body(node)
+        !!body && sig_type_untyped?(body, seen)
+      else
+        false
+      end
+    end
+
+    def sig_alias_body(node)
+      tae = node.static_ret&.last&.type_alias_entity
+      tae.type if tae&.exist?
     end
 
     def call(changes, genv, a_args, ret)
       a_args = a_args.with_keywords_normalized_for(@node)
       if pass_arguments(changes, genv, a_args)
-        if @node.is_a?(AST::DefNode)
-          @node.body.lenv.forward_args&.accept_actual_arguments(genv, changes, a_args)
-        end
         changes.add_edge(genv, a_args.block, @f_args.block) if @f_args.block && a_args.block
 
         changes.add_edge(genv, @ret, ret)

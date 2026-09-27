@@ -345,7 +345,8 @@ module TypeProf::Core
 
       def typecheck(genv, changes, vtx, subst)
         changes.add_edge(genv, vtx, changes.target)
-        vtx.types.empty?
+        vtx.each_type {|ty| return false unless ty.is_a?(Type::Bot) }
+        true
       end
 
       def show
@@ -822,7 +823,7 @@ module TypeProf::Core
         end
 
         # Create base Hash type for Record
-        key_vtx = Source.new(genv.symbol_type)
+        key_vtx = changes.new_source([self, :key], genv.symbol_type)
         # Create union of all field values for the Hash value type
         val_vtx = changes.new_covariant_vertex(genv, [self, :union])
         field_vertices.each_value do |field_vtx|
@@ -840,7 +841,7 @@ module TypeProf::Core
         end
 
         # Create base Hash type for Record
-        key_vtx = Source.new(genv.symbol_type)
+        key_vtx = changes.new_source([self, :key], genv.symbol_type)
         # Create union of all field values for the Hash value type
         val_vtx = changes.new_contravariant_vertex(genv, [self, :union])
         field_vertices.each_value do |field_vtx|
@@ -858,12 +859,13 @@ module TypeProf::Core
           next if ty.is_a?(Type::Bot)
           found_any = true
           case ty
-          when Type::Hash
-            @keys.zip(@vals) do |key, val_node|
+          when Type::Hash, Type::Record
+            # Type::Record#get_value returns nil for a key the record does not have.
+            matched = @keys.zip(@vals).all? do |key, val_node|
               val_vtx = ty.get_value(key)
-              return false unless val_node.typecheck(genv, changes, val_vtx, subst)
+              val_vtx && val_node.typecheck(genv, changes, val_vtx, subst)
             end
-            return true
+            return true if matched
           end
         end
         !found_any
@@ -911,8 +913,9 @@ module TypeProf::Core
       end
 
       def typecheck(genv, changes, vtx, subst)
+        return true unless vtx # a type argument the instance type lacks
         var_vtx = resolve_var(genv, subst)
-        changes.add_edge(genv, vtx.new_vertex(genv, self), var_vtx) unless vtx == var_vtx
+        changes.add_edge(genv, changes.new_vertex(genv, self, vtx), var_vtx) unless vtx == var_vtx
         true
       end
 
@@ -944,14 +947,20 @@ module TypeProf::Core
         # For optional type T?, check if all non-nil types match T.
         # nil is always acceptable.
         changes.add_edge(genv, vtx, changes.target)
-        has_non_nil = false
+        non_nil = []
+        has_nil = false
         vtx.each_type do |ty|
           next if ty.is_a?(Type::Bot)
-          next if ty == genv.nil_type
-          has_non_nil = true
+          if ty == genv.nil_type
+            has_nil = true
+          else
+            non_nil << ty
+          end
         end
-        return true unless has_non_nil
-        @type.typecheck(genv, changes, vtx, subst)
+        return true if non_nil.empty?
+        return @type.typecheck(genv, changes, vtx, subst) unless has_nil
+        # nil is accepted here, so T checks the other types alone.
+        @type.typecheck(genv, changes, changes.new_source([self, :non_nil, non_nil], *non_nil), subst)
       end
 
       def show

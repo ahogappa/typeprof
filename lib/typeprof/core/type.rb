@@ -176,6 +176,8 @@ module TypeProf::Core
         raise unless base_type.is_a?(Instance)
       end
 
+      attr_reader :literal_pairs
+
       def get_key
         @base_type.args[0]
       end

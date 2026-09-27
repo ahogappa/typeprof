@@ -11,7 +11,7 @@ module TypeProf::Core
     def aliases = @aliases ||= {}
     def method_call_boxes = @method_call_boxes ||= Set.empty
 
-    private def overloading_decls = @overloading_decls ||= Set.empty
+    def overloading_decls = @overloading_decls ||= Set.empty
 
     def add_decl(decl)
       if decl.overloading

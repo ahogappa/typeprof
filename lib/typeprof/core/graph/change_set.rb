@@ -21,6 +21,7 @@ module TypeProf::Core
 
     def covariant_types = @covariant_types ||= {}
     def contravariant_types = @contravariant_types ||= {}
+    def sources = @sources ||= {}
     def edges = @edges ||= {}
     def boxes = @boxes ||= {}
 
@@ -37,12 +38,14 @@ module TypeProf::Core
     def copy_from(other)
       @covariant_types = other.covariant_types.dup
       @contravariant_types = other.contravariant_types.dup
+      @sources = other.sources.dup
       @edges = other.edges.dup
       @boxes = other.boxes.dup
       @diagnostics = other.diagnostics.dup
 
       other.covariant_types.clear
       other.contravariant_types.clear
+      other.sources.clear
       other.edges.clear
       other.boxes.clear
       other.diagnostics.clear
@@ -63,6 +66,13 @@ module TypeProf::Core
     def new_contravariant_vertex(genv, sig_type_node)
       # This is used to avoid duplicated vertex generation for the same sig node
       contravariant_types[sig_type_node] ||= Vertex.new(sig_type_node)
+    end
+
+    # The same Source for the same key on every run of the box. Type.new
+    # memoizes on the identity of its argument vertices, so a type built on a
+    # fresh Source would be a new type each run, and could re-run the box forever.
+    def new_source(key, *tys)
+      sources[key] ||= Source.new(*tys)
     end
 
     def add_edge(genv, src, dst)

@@ -141,7 +141,10 @@ module TypeProf::Core
               base = kw_ty.base_type(genv)
               rest_record = Type::Record.new(genv, rest_fields, base)
               changes.add_edge(genv, Source.new(rest_record), @rest_keywords)
-            when Type::Hash, Type::Instance
+            when Type::Hash
+              pairs = kw_ty.literal_pairs.reject {|key, _| named_keys.include?(key) }
+              changes.add_edge(genv, Source.new(Type::Hash.new(genv, pairs, kw_ty.base_type(genv))), @rest_keywords)
+            when Type::Instance
               changes.add_edge(genv, Source.new(kw_ty), @rest_keywords)
             end
           end
@@ -646,7 +649,7 @@ module TypeProf::Core
 
     def initialize(node)
       @node = node
-      @used = false
+      @used = Vertex.new(node)
       @f_args = []
       @ret = Vertex.new(node)
     end
@@ -655,12 +658,17 @@ module TypeProf::Core
       @f_args[i] ||= Vertex.new(@node)
     end
 
-    attr_reader :node, :f_args, :ret, :used
+    attr_reader :node, :f_args, :ret
+
+    # Whether a call of the block is in the graph. Each call adds an edge to
+    # @used through its own ChangeSet, so the block stops being used when no
+    # call is left, e.g. when the def it is passed on to stops getting it.
+    def used = !@used.types.empty?
 
     def accept_args(genv, changes, caller_positionals)
-      @used = true
+      changes.add_edge(genv, changes.new_source(:record_block_used, genv.true_type), @used)
       caller_positionals.each_with_index do |a_arg, i|
-        changes.add_edge(genv, a_arg.new_vertex(genv, @node), get_f_arg(i))
+        changes.add_edge(genv, changes.new_vertex(genv, @node, a_arg), get_f_arg(i))
       end
     end
 
