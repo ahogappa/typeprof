@@ -181,26 +181,26 @@ end
 ## assert: test.rb
 class Foo
   def fwd: (*Integer, **String) -> Object?
-  def fwd_block: (*untyped, **untyped) { (String) -> untyped } -> Object?
+  def fwd_block: (*untyped, **untyped) { (String) -> Integer } -> Object?
   def helper: (Integer, k: String) -> nil
-  def yielder: { (String) -> untyped } -> nil
+  def yielder: { (String) -> Integer } -> nil
   def n: -> Integer
   def k: -> String
-  def y: -> untyped
+  def y: -> Integer
 end
 class Parent
   def opt: (?Integer?) -> nil
   def rest: (**String) -> nil
-  def block: { () -> untyped } -> nil
+  def block: { () -> Integer } -> nil
   def run: (untyped, ?Integer) -> untyped
   def x: -> Integer?
   def kw: -> Hash[Symbol, String]
-  def b: -> untyped
+  def b: -> Integer
 end
 class Child < Parent
   def opt: (?Integer?) -> Object?
   def rest: (**String) -> Object?
-  def block: { () -> untyped } -> Object?
+  def block: { () -> Integer } -> Object?
   def run: (*untyped) -> untyped
 end
 class Base
@@ -238,6 +238,6 @@ end
 module Util
   def helper: (*untyped, **untyped) { () -> untyped } -> untyped
   def self.helper: (*untyped, **untyped) { () -> untyped } -> untyped
-  def other: { () -> untyped } -> untyped
-  def self.other: { () -> untyped } -> untyped
+  def other: { () -> String } -> String
+  def self.other: { () -> String } -> String
 end

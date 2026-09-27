@@ -68,6 +68,6 @@ end
 
 ## assert
 class Bar
-  def with_block: { () -> untyped } -> Object
+  def with_block: { () -> Integer } -> (Integer | Object)
   def proc_arg: (Proc) -> Integer
 end

@@ -640,6 +640,17 @@ module TypeProf::Core
         changes.add_edge(genv, box.a_ret, ret)
       end
     end
+
+    # Checks what the block returns against the block return type a method
+    # declaration expects (MethodDeclBox), reporting each return of the block
+    # (each next_box) that does not match.
+    def typecheck_ret(genv, changes, ret_type, param_map)
+      @next_boxes.each do |next_box|
+        unless ret_type.typecheck(genv, changes, next_box.a_ret, param_map)
+          next_box.wrong_return_type(ret_type.show, changes)
+        end
+      end
+    end
   end
 
   class RecordBlock
@@ -652,13 +663,16 @@ module TypeProf::Core
       @used = Vertex.new(node)
       @f_args = []
       @ret = Vertex.new(node)
+      @sig_ret = Vertex.new(node)
     end
 
     def get_f_arg(i)
       @f_args[i] ||= Vertex.new(@node)
     end
 
-    attr_reader :node, :f_args, :ret
+    # sig_ret holds the block return type declared in the method's signature
+    # (bound by MethodDefBox#run0). Every call of the block returns it.
+    attr_reader :node, :f_args, :ret, :sig_ret
 
     # Whether a call of the block is in the graph. Each call adds an edge to
     # @used through its own ChangeSet, so the block stops being used when no
@@ -674,6 +688,13 @@ module TypeProf::Core
 
     def add_ret(genv, changes, ret)
       changes.add_edge(genv, ret, @ret)
+      changes.add_edge(genv, @sig_ret, ret)
+    end
+
+    # A def's block has no body here to check: sig_ret, the block return its
+    # own declaration gives, only infers the type variables of ret_type.
+    def typecheck_ret(genv, changes, ret_type, param_map)
+      ret_type.typecheck(genv, changes, @sig_ret, param_map)
     end
   end
 end

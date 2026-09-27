@@ -11,8 +11,8 @@ end
 
 ## assert: test.rb
 class Foo
-  def each_x: (*untyped, **untyped) { (Integer) -> untyped } -> Object
-  def helper: { (Integer) -> untyped } -> untyped
+  def each_x: (*untyped, **untyped) { (Integer) -> String } -> (Object | String)
+  def helper: { (Integer) -> String } -> String
 end
 
 ## update: test.rbs

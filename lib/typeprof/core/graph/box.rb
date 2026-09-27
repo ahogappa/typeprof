@@ -403,14 +403,7 @@ module TypeProf::Core
           case ty
           when Type::Proc
             ty.block.pass_arguments(genv, changes, ActualArguments.new(blk_a_args, ::Array.new(blk_a_args.size, false), nil, nil))
-
-            if ty.block.is_a?(Block)
-              ty.block.next_boxes.each do |next_box|
-                unless rbs_blk.return_type.typecheck(genv, changes, next_box.a_ret, param_map0)
-                  next_box.wrong_return_type(rbs_blk.return_type.show, changes)
-                end
-              end
-            end
+            ty.block.typecheck_ret(genv, changes, rbs_blk.return_type, param_map0)
           when Type::Symbol
             resolve_symbol_proc(changes, genv, ty.sym, blk_a_args, rbs_blk, param_map0)
           end
@@ -823,10 +816,11 @@ module TypeProf::Core
         splat_flags << false
       end
 
-      # Which overload a call took is unknown here, so the keywords are bound
-      # only when the method has a single declaration with a single method
-      # type. (Positional arguments always use the first method type, and are
-      # bound whatever their type; see the TODO above.)
+      # Which overload a call took is unknown here, so the keywords and the
+      # block's return type are bound only when the method has a single
+      # declaration with a single method type. (Positional arguments always
+      # use the first method type, and are bound whatever their type; see the
+      # TODO above.)
       decls = me.decls.to_a + me.overloading_decls.to_a
       single = decls.size == 1 && decl.method_types.size == 1
       keywords =
@@ -860,7 +854,13 @@ module TypeProf::Core
       forward = sig_positionals_forwardable?(sig_positionals, a_args)
       return unless pass_arguments(changes, genv, a_args, forward)
 
-      # TODO: block return type
+      # A call of the block returns its declared return type. void is not
+      # bound: it would be bound as Object, and a call such as `yield.size`
+      # would be reported as an undefined method.
+      blk_ret = method_type.block&.return_type
+      if single && blk_ret && !blk_ret.is_a?(AST::SigTyBaseVoidNode) && sig_type_bindable?(blk_ret)
+        changes.add_edge(genv, blk_ret.contravariant_vertex(genv, changes, param_map0), @record_block.sig_ret)
+      end
       f_ret = method_type.return_type.contravariant_vertex(genv, changes, param_map0)
       changes.add_edge(genv, f_ret, @ret)
       @ret_boxes.each do |ret_box|
